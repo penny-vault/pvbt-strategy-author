@@ -1,0 +1,10 @@
+{
+  "name": "pvbt-strategy-author",
+  "version": "0.1.0",
+  "description": "Design and review pvbt quantitative trading strategies. Activates when writing Go code that imports github.com/penny-vault/pvbt.",
+  "author": {
+    "name": "penny-vault"
+  },
+  "homepage": "https://github.com/penny-vault/pvbt-strategy-author",
+  "keywords": ["pvbt", "penny-vault", "quantitative-trading", "backtesting", "go"]
+}
