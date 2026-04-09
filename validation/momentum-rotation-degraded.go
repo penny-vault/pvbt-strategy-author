@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/penny-vault/pvbt/asset"
 	"github.com/penny-vault/pvbt/cli"
 	"github.com/penny-vault/pvbt/data"
 	"github.com/penny-vault/pvbt/engine"
@@ -60,39 +61,41 @@ func (s *MomentumRotation) Compute(ctx context.Context, eng *engine.Engine, port
 		return nil
 	}
 
-	// PLANTED (Pass 2: idiom): hand-rolled return calculation. The canonical
-	// form is riskOnDF.Pct(riskOnDF.Len() - 1).Last().
-	momentum := riskOnDF.Pct(riskOnDF.Len() - 1).Last() // placeholder; overwritten below
-	assets := riskOnDF.AssetList()
-	lastRow := riskOnDF.Len() - 1
-	for ii := 0; ii < len(assets); ii++ {
-		var first, last float64
-		for row := 0; row < riskOnDF.Len(); row++ {
-			value := riskOnDF.ValueAt(assets[ii], data.MetricClose, riskOnDF.TimeAt(row))
-			if row == 0 {
-				first = value
-			}
-			if row == lastRow {
-				last = value
-			}
+	// PLANTED (Pass 2: idiom): hand-rolled selection and weighting instead of
+	// the canonical pipeline. The canonical form is:
+	//     portfolio.MaxAboveZero(data.MetricClose, riskOffDF).Select(momentum)
+	//     plan, err := portfolio.EqualWeight(momentum)
+	momentum := riskOnDF.Pct(riskOnDF.Len() - 1).Last()
+
+	var best asset.Asset
+	bestRet := 0.0
+	for _, ast := range momentum.AssetList() {
+		ret := momentum.Value(ast, data.MetricClose)
+		if ret > bestRet {
+			bestRet = ret
+			best = ast
 		}
-		ret := (last / first) - 1.0
-		momentum.SetValue(assets[ii], data.MetricClose, riskOnDF.TimeAt(lastRow), ret)
 	}
 
-	riskOffDF, err := s.RiskOff.At(ctx, eng.CurrentDate(), data.MetricClose)
+	riskOffDF, err := s.RiskOff.At(ctx, data.MetricClose)
 	if err != nil {
 		return fmt.Errorf("risk-off snapshot fetch: %w", err)
 	}
 
-	portfolio.MaxAboveZero(data.MetricClose, riskOffDF).Select(momentum)
-
-	plan, err := portfolio.EqualWeight(momentum)
-	if err != nil {
-		return fmt.Errorf("equal-weight plan: %w", err)
+	members := map[asset.Asset]float64{}
+	if bestRet > 0 {
+		members[best] = 1.0
+	} else {
+		for _, ast := range riskOffDF.AssetList() {
+			members[ast] = 1.0
+			break
+		}
 	}
 
-	if err := batch.RebalanceTo(ctx, plan...); err != nil {
+	if err := batch.RebalanceTo(ctx, portfolio.Allocation{
+		Date:    eng.CurrentDate(),
+		Members: members,
+	}); err != nil {
 		return fmt.Errorf("rebalance: %w", err)
 	}
 

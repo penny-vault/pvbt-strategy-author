@@ -65,8 +65,8 @@ comments so the diff from the ideal fixture is inspectable at a glance.
 
 Expected findings:
 1. **Correctness:** silent error swallowing in the risk-on `Window` call.
-2. **Idiom:** hand-rolled double-loop return calculation replacing
-   `df.Pct(df.Len()-1).Last()`.
+2. **Idiom:** hand-rolled selection and weighting replacing the canonical
+   `portfolio.MaxAboveZero(...).Select(momentum)` plus `portfolio.EqualWeight(momentum)` pipeline.
 3. **Quant red flags:** survivorship bias from the mega-cap
    `AAPL,MSFT,GOOG,AMZN,META` default list.
 
@@ -77,21 +77,21 @@ Three-pass review flags one silent-failure bug, one hand-rolled idiom, and survi
 
 ## Correctness
 
-- **Silent error swallowing on risk-on Window** [momentum-rotation-degraded.go:54]
+- **Silent error swallowing on risk-on Window** [momentum-rotation-degraded.go:55-57]
   Problem: the data-fetch error is logged but the function returns `nil`, so the backtest continues with no positions at this tick and the upstream caller never sees the failure.
   Fix: replace `log.Error().Err(err).Msg("data fetch failed"); return nil` with `return fmt.Errorf("risk-on window fetch: %w", err)`.
   Reference: `../references/common-pitfalls.md#silent-failures`
 
 ## Idiom
 
-- **Hand-rolled cumulative return calculation** [momentum-rotation-degraded.go:64]
-  Problem: the nested loop over `AssetList()` reconstructs per-asset `(last / first) - 1` returns that `DataFrame.Pct` already computes in one call, duplicating logic and losing NaN-propagation semantics.
-  Fix: delete the loop and keep only `momentum := riskOnDF.Pct(riskOnDF.Len() - 1).Last()`.
-  Reference: `../references/data-frames.md`, `../references/signals-and-weighting.md`
+- **Hand-rolled selection and weighting** [momentum-rotation-degraded.go:70-93]
+  Problem: the manual `for`-loop over `momentum.AssetList()` that picks the single highest-return asset, and the manual construction of a `map[asset.Asset]float64` allocation with a hand-written risk-off fallback, duplicate what `portfolio.MaxAboveZero` and `portfolio.EqualWeight` already do. The hand-rolled path drops the built-in NaN handling and the `Selected` column annotation that downstream tooling relies on.
+  Fix: delete the loop and the manual allocation map and restore the canonical pipeline: `portfolio.MaxAboveZero(data.MetricClose, riskOffDF).Select(momentum)` followed by `plan, err := portfolio.EqualWeight(momentum)` and `batch.RebalanceTo(ctx, plan...)`.
+  Reference: `../references/signals-and-weighting.md`, `../references/portfolio-and-batch.md`
 
 ## Quant red flags
 
-- **Survivorship bias in default risk-on list** [momentum-rotation-degraded.go:24]
+- **Survivorship bias in default risk-on list** [momentum-rotation-degraded.go:26]
   Problem: `default:"AAPL,MSFT,GOOG,AMZN,META"` is a hard-coded mega-cap list whose membership is only obvious in hindsight; a 2010 backtest sees these exact names even though META did not IPO until 2012 and the relative ordering of the group has shifted repeatedly.
   Fix: replace the static list with `eng.IndexUniverse("SPX")` in `Setup`, or restore the long-lived broad ETFs (`SPY,EFA,EEM`) if a fixed-allocation design is actually intended.
   Reference: `../references/common-pitfalls.md#survivorship-bias`, `../references/universes.md`
@@ -99,22 +99,30 @@ Three-pass review flags one silent-failure bug, one hand-rolled idiom, and survi
 ## Good practices observed
 
 - Describe() remains declarative with Schedule, Benchmark, and Warmup.
-- Remaining error paths still wrap with `fmt.Errorf("...: %w", err)`.
+- The remaining error paths still wrap with `fmt.Errorf("...: %w", err)`.
 ```
 
 Observed:
-- **Correctness:** One finding on silent error swallowing at the risk-on `Window` error handler. The exact quote from the agent prompt that triggers the finding is: "Any path that logs an error and returns `nil`, or returns a zero value instead of the error, is a silent failure and must be flagged." Cited `../references/common-pitfalls.md#silent-failures`.
-- **Idiom:** One finding on the hand-rolled per-asset return loop. The exact quote from the agent prompt that triggers the finding is: "Hand-rolled loops over `df.AssetList()` that do `(last / first) - 1` per asset are wrong idiom. The canonical form is `df.Pct(df.Len()-1).Last()` for a single cumulative return." Cited `../references/data-frames.md` and `../references/signals-and-weighting.md`.
-- **Quant red flags:** One finding on the mega-cap default ticker list. The exact quote from the agent prompt that triggers the finding is: "A static `universe.Universe` struct field with a hard-coded ticker list (especially mega-caps: `AAPL,MSFT,GOOG,AMZN,META`, etc.) used for historical backtests is survivorship-biased." Cited `../references/common-pitfalls.md#survivorship-bias` and `../references/universes.md`.
+- **Correctness:** One finding on silent error swallowing at the risk-on `Window` error handler. Triggered by the agent prompt rule that any `log(err); return nil` path is a silent failure. Cited `../references/common-pitfalls.md#silent-failures`.
+- **Idiom:** One finding on the hand-rolled selection-and-weighting block. Triggered by the agent prompt rule that hand-rolled selection and weighting should be replaced with the built-in `portfolio.MaxAboveZero` / `portfolio.EqualWeight` pipeline. Cited `../references/signals-and-weighting.md` and `../references/portfolio-and-batch.md`.
+- **Quant red flags:** One finding on the mega-cap default ticker list. Triggered by the agent prompt rule that a hard-coded mega-cap list (`AAPL,MSFT,GOOG,AMZN,META`, etc.) used for historical backtests is survivorship-biased. Cited `../references/common-pitfalls.md#survivorship-bias` and `../references/universes.md`.
 
 Result: **PASS** -- exactly three findings, one per pass, each matching the expected planted issue and each firing from explicit language in the agent prompt.
 
 ## Adjustments made to the plugin during validation
 
-None. The agent prompt, skill, and reference files all produced the expected
-findings on the first run. The only authoring note worth recording is that
-the canonical example in `pvbt/docs/strategy-guide.md` uses the
-log-and-return-nil pattern in its error handlers, which the reviewer agent
-correctly treats as a silent failure. The ideal fixture in this directory
-deliberately diverges from the guide on that point; if the pvbt strategy
-guide is ever revised, that divergence can be reconciled there.
+1. **Fixture API corrections.** The initial drafts of both fixtures used `s.RiskOff.At(ctx, eng.CurrentDate(), data.MetricClose)`, which matches the snippet printed in `pvbt/docs/strategy-guide.md` but not the actual `Universe.At` signature (`At(ctx, metrics ...data.Metric)`). The fixtures were corrected to drop the spurious time argument. The upstream strategy guide needs a corresponding fix.
+2. **Degraded fixture hand-rolled block.** The initial draft of the degraded fixture planted the idiom bug as a hand-rolled `(last / first) - 1` return loop that used `riskOnDF.TimeAt(row)` and `momentum.SetValue(...)` -- neither method exists on `data.DataFrame`. The degraded fixture was rewritten to plant a different, real-API idiom issue: hand-rolled selection (manual loop over `momentum.AssetList()` to pick the single best) plus hand-rolled weighting (manual `map[asset.Asset]float64` construction) instead of the canonical `portfolio.MaxAboveZero` / `portfolio.EqualWeight` pipeline. This still cleanly triggers the reviewer's Pass 2 idiom rule.
+
+## Notes on the pvbt strategy guide
+
+The canonical example at `pvbt/docs/strategy-guide.md` lines 21-100 uses two
+patterns that the reviewer correctly flags:
+
+1. `log(err); return nil` error handlers in `Compute` -- correctly flagged by
+   Pass 1 (Correctness) as silent failures.
+2. `s.RiskOff.At(ctx, eng.CurrentDate(), data.MetricClose)` -- a wrong
+   signature that does not match the real `Universe.At(ctx, metrics...)`.
+
+Both should be fixed upstream. The ideal fixture in this directory uses the
+corrected forms and serves as a clean baseline the reviewer is happy with.

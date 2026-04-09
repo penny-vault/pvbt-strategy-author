@@ -57,7 +57,7 @@ func (s *MomentumRotation) Compute(ctx context.Context, eng *engine.Engine, port
 
 	momentum := riskOnDF.Pct(riskOnDF.Len() - 1).Last()
 
-	riskOffDF, err := s.RiskOff.At(ctx, eng.CurrentDate(), data.MetricClose)
+	riskOffDF, err := s.RiskOff.At(ctx, data.MetricClose)
 	if err != nil {
 		return fmt.Errorf("risk-off snapshot fetch: %w", err)
 	}
