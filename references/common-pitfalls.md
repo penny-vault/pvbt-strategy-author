@@ -264,6 +264,33 @@ const (
 
 **How to detect in review:** Count exported fields on the strategy struct. More than ten is a red flag; more than fifteen almost guarantees overfitting. For each parameter, ask: can the author write a one-sentence explanation of what changing it should do, justified by theory or by the original paper? If the answer is "it's the value that worked best", the parameter is overfit by construction. Look for unusually-precise default values (`0.0173`, `42`, `19`) -- those are usually grid-search artifacts. Also look for parameters that share a unit and could be collapsed (a `lookback` and `lookback-short` and `lookback-long` triple smells like one parameter pretending to be three).
 
+## Optimization disguised as robustness testing
+
+Robustness testing and optimization look similar from the outside -- both involve running many variants of a strategy -- but they have opposite goals. Optimization asks "which configuration wins on this dataset?" and answers by picking the peak cell of a grid search. Robustness testing asks "does this pattern survive when I remove parameters, change the dataset, or shift the holding period?" and answers by confirming the pattern persists across neighborhoods, not by locating the peak. An LLM-assisted workflow drifts toward the former unless the author actively pushes back, because each "what if we added X?" suggestion is a local productivity gain but a global step away from a defensible backtest.
+
+**Symptom:** New parameters introduced mid-analysis to "handle" a regime where the baseline underperformed. Filters added to suppress losing trades (volatility caps, trend filters, regime gates) that were not in the original hypothesis. Selection of the single best parameter cell from a grid rather than the center of a performing cluster. Analyses that stop when the Sharpe ratio crosses a threshold rather than when the pattern is understood. "Robustness" experiments that expand the parameter surface instead of shrinking it.
+
+```
+# BAD: "robustness testing" that adds degrees of freedom each round.
+round 1: Lookback N, holding H                       (2 parameters)
+round 2: + z-score window W                          (3 parameters)
+round 3: + entry threshold T                         (4 parameters)
+round 4: + max-drawdown exit D                       (5 parameters)
+round 5: picks the best cell of the 4D grid          -- overfit
+```
+
+**Fix:** The correct moves when testing robustness are all subtractive or lateral, not additive:
+
+- **Remove a parameter** and confirm the result degrades gracefully rather than collapsing. If pulling one knob drops Sharpe from 0.48 to 0.12, the original result was living in that knob.
+- **Transfer the strategy to a different asset or universe** with the same logic and minimum of refitting. A reversal pattern on EEM that also appears (weaker but present) on SPY is more credible than one that works only on EEM.
+- **Average equity curves across a cluster of parameter configurations** rather than picking the peak. A strategy whose average-of-neighborhood looks good is robust; one whose peak cell towers over its neighbors is overfit.
+- **Shorten the parameter range** and verify the pattern still emerges. If "lookback 1-10" shows a broad region of positive Sharpe, the idea is plausible. If only lookback = 7 works, it is an artifact.
+- **Stop when the pattern clarifies, not when the Sharpe peaks.** The moment the LLM (or the author) reaches for another filter or another knob to "improve" the result, the analysis has crossed from robustness testing into optimization.
+
+A concrete rule for reviewers and authors: if an iteration of analysis increases the parameter count, it is optimization. If it decreases the parameter count, changes the dataset, or aggregates across configurations, it is robustness testing. Be explicit about which one is happening.
+
+**How to detect in review:** Look at the git history or development log for the strategy. Count parameters over time -- a monotonically increasing count is a smell. Look for parameters whose names betray their origin ("trend filter", "regime gate", "dd-stop") and were not in the original hypothesis. Look at default values: defaults that cluster on grid-search sweet spots (`lookback=7`, `threshold=-1.25`, `holding=5`) rather than round numbers suggest peak-cell selection. Ask the author to describe the strategy in one sentence; if the one-sentence description does not mention a given parameter, it was probably added to patch a specific failure. The LLM's own suggested "next step" is the most common source of this drift -- if the suggestion is "add a X filter to avoid the Y losses in year Z", decline it and instead test whether the signal survives without the filter.
+
 ## Silent failures
 
 A silent failure is any code path that produces an apparently-valid result while actually losing information. The pvbt convention is to surface errors loudly: `fmt.Errorf("context: %w", err)` to wrap with context, log at error level, and either return the error from `Compute` (to halt the backtest) or return `nil` (to skip this tick) -- but never both swallow the error and produce a fabricated value.

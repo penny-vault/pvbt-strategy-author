@@ -84,19 +84,20 @@ Apply these defaults silently. Mark each in the output spec with `(default)`.
 | Warmup | Derived from the longest declared lookback |
 | Schedule | `@monthend` if "rebalance" is mentioned without cadence |
 | Selection | `MaxAboveZero` if "rotate"; `TopN(1)` if "pick the best" |
-| Parameters | Only the stated knobs of the idea |
+| Parameters | Only the stated knobs of the idea. Start from two; add a third only when the idea genuinely requires it, a fourth only when the author explicitly asks |
 | Presets | None unless named variants are mentioned |
 | Risk management | None unless explicitly requested |
 
 ## Ambiguity triggers
 
-Pause the brainstorm only for these situations. Maximum of five.
+Pause the brainstorm only for these situations. Maximum of six.
 
 1. **Signal math is vague** -- the description says "momentum", "value", "trend", or similar but it could be raw return, risk-adjusted return, or price-vs-MA, and context does not pick one. This trigger also fires when the signal type *is* clear (e.g. "trailing P/E") but the lookback window is unspecified and no default makes sense.
 2. **Selection count undeclared** -- the description says "top" or "best" without a count or percentage.
 3. **Rebalance cadence neither stated nor implied** -- no cadence verb appears anywhere ("monthly", "quarterly", "rebalance", etc.).
 4. **Exit rules mentioned but not detailed** -- the author hints at stop-losses, trailing stops, or exit conditions without specifying the trigger.
 5. **Universe ambiguous between static and index-tracking** -- "the S&P 500" could mean today's constituents (static) or `IndexUniverse("SPX")` (point-in-time membership). Default to `IndexUniverse` unless the author says "the current S&P 500".
+6. **Multiple filters or thresholds implied** -- the description stacks conditions ("trend filter AND volatility cap AND regime gate", or a signal plus a z-score plus an entry threshold plus a holding cap). Ask which one is essential to the idea rather than exposing them all as parameters. Degrees of freedom are the scarce resource; the answer guides the minimum viable parameter set in the spec.
 
 **Do not ask about slots where a default is safe. Note the default in the design doc instead.** The author wants a strategy spec, not a questionnaire.
 
